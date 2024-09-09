@@ -1,0 +1,9 @@
+apiVersion: apps.kubebuilder.demo/v1alpha1
+kind: WebApp
+metadata:
+  labels:
+    app.kubernetes.io/name: kubebuilder-demo
+    app.kubernetes.io/managed-by: kustomize
+  name: webapp-sample
+spec:
+  # TODO(user): Add fields here
