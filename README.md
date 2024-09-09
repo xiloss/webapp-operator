@@ -238,3 +238,31 @@ Changing the name and target namespace to where to deploy the operator could be 
 For the current case, a preferred choice for the target namespace will be `webapp-operator`, and for the namePrefix 
 `webapp-operator-`
 
+## Adding instrumentation for metrics to the webapp-operator
+
+To instrument the controller with metrics for Prometheus, we can use the controller-runtime's built-in support for 
+metrics and Prometheus. We will add custom metrics, tracking the creation of WebApp, Deployment, and Service resources.
+
+Next steps will complete the required instrumentation:
+
+### Adding Prometheus dependencies
+
+First it's necessary to add the required dependencies to our current project.
+The following command will complete the task:
+
+```bash
+go get github.com/prometheus/client_golang/prometheus
+go get sigs.k8s.io/controller-runtime/pkg/metrics
+go get github.com/prometheus/client_golang/prometheus/promhttp@v1.20.3
+```
+
+Now we will be able to use them in the [webapp_controller.go](internal/controller/webapp_controller.go)
+
+Since we are going to introduce metrics for count the number of webapp resources created, the number of deployments and 
+the number of service created, this is generally achieved defining global variables.
+To achieve that, the global variables will be included in the [main.go](cmd/main.go) file.
+The three metrics will be also included in the init() function.
+
+Once the previous steps are completed, we can start include the updates to the reconciler logic.
+
+

@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"github.com/prometheus/client_golang/prometheus"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -27,13 +28,42 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	appsv1alpha1 "kubebuilder-demo/api/v1alpha1"
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
-// ctrlLog is the local instance of the logger of the controller
-var ctrlLog = ctrl.Log.WithName("controller")
+var (
+	// ctrlLog is the local instance of the logger of the controller
+	ctrlLog = ctrl.Log.WithName("controller")
+
+	webAppCreatedCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "webapp_created_total",
+			Help: "Number of WebApp resources created",
+		},
+	)
+
+	deploymentCreatedCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "deployment_created_total",
+			Help: "Number of Deployment resources created for WebApp",
+		},
+	)
+
+	serviceCreatedCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "service_created_total",
+			Help: "Number of Service resources created for WebApp",
+		},
+	)
+)
+
+func init() {
+	// Register custom metrics with the global Prometheus registry
+	metrics.Registry.MustRegister(webAppCreatedCounter, deploymentCreatedCounter, serviceCreatedCounter)
+}
 
 // WebAppReconciler reconciles a WebApp object
 type WebAppReconciler struct {
@@ -61,7 +91,7 @@ const webAppFinalizer = "finalizer.webapp.kubebuilder.demo"
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.19.0/pkg/reconcile
 func (r *WebAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := log.FromContext(ctx)
+	logger := log.FromContext(ctx)
 
 	// Fetch the WebApp instance
 	webApp := &appsv1alpha1.WebApp{}
@@ -80,7 +110,7 @@ func (r *WebAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		// The object is being deleted
 		if controllerutil.ContainsFinalizer(webApp, webAppFinalizer) {
 			// Log the deletion of the WebApp resource
-			log.Info("deleting WebApp resource",
+			logger.Info("deleting WebApp resource",
 				"webapp", webApp.Name,
 				"namespace", webApp.Namespace)
 			// Perform any additional cleanup logic if necessary
@@ -145,11 +175,13 @@ func (r *WebAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	foundDeployment := &appsv1.Deployment{}
 	err = r.Get(ctx, types.NamespacedName{Name: webApp.Name, Namespace: webApp.Namespace}, foundDeployment)
 	if err != nil && errors.IsNotFound(err) {
-		log.Info("Creating a new Deployment", "Deployment.Namespace", deployment.Namespace, "Deployment.Name", deployment.Name)
+		logger.Info("Creating a new Deployment", "namespace", deployment.Namespace, "name", deployment.Name)
 		err = r.Create(ctx, deployment)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
+		deploymentCreatedCounter.Inc() // Increment deployment counter
+		webAppCreatedCounter.Inc()     // Increment webApp counter
 		// Deployment created successfully - don't requeue
 		return ctrl.Result{}, nil
 	} else if err != nil {
@@ -196,97 +228,20 @@ func (r *WebAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		if err != nil {
 			return ctrl.Result{}, err
 		}
+		serviceCreatedCounter.Inc() // Increment service counter
 		// Service created successfully - don't requeue
 		return ctrl.Result{}, nil
 	} else if err != nil {
 		return ctrl.Result{}, err
 	}
 
-	// Check for updates before logging
-	//var serviceUpdated = false
-
-	//// Selector update case
-	//if svcSelectorChanged(foundService, service) {
-	//	//serviceUpdated = true
-	//	foundService.Spec.Selector = service.Spec.Selector
-	//	ctrlLog.Info("service selector updated", "service", foundService.Name,
-	//		"namespace", foundService.Namespace,
-	//		"selector", foundService.Spec.Selector)
-	//	err = r.Update(ctx, foundService)
-	//	if err != nil {
-	//		return ctrl.Result{}, err
-	//	}
-	//}
-	//
-	//// Port update case
-	//if svcPortsChanged(foundService, service) {
-	//	//serviceUpdated = true
-	//	foundService.Spec.Ports[0].Port = service.Spec.Ports[0].Port
-	//	ctrlLog.Info("service port updated", "service", foundService.Name,
-	//		"namespace", foundService.Namespace,
-	//		"port", foundService.Spec.Ports[0].Port)
-	//	err = r.Update(ctx, foundService)
-	//	if err != nil {
-	//		return ctrl.Result{}, err
-	//	}
-	//}
-
-	// Only log if there are no updates
-	//if !serviceUpdated {
-	//	// Service already exists - don't requeue
-	//	//ctrlLog.Info("skip reconcile: deployment already exists", "deployment", foundDeployment.Name,
-	//	//	"namespace", foundDeployment.Namespace,
-	//	//	"uid", foundDeployment.UID)
-	//	// Service already exists - don't requeue
-	//	ctrlLog.Info("skip reconcile: service already exists", "service", foundService.Name,
-	//		"namespace", foundService.Namespace,
-	//		"uid", foundService.UID)
-	//	serviceUpdated = true
-	//}
 	// Service already exists - don't requeue
-	log.Info("Skip reconcile: Service already exists",
+	logger.Info("Skip reconcile: Service already exists",
 		"namespace", foundService.Namespace,
 		"service", foundService.Name)
 
 	return ctrl.Result{}, nil
 }
-
-//// Helper function to check changes on deployment image
-//func deploymentImageChanged(existingDeploy, newDeploy *appsv1.Deployment) bool {
-//	if existingDeploy.Spec.Template.Spec.Containers[0].Image != newDeploy.Spec.Template.Spec.Containers[0].Image {
-//		return true
-//	}
-//	return false
-//}
-//
-//// Helper function to check changes on deployment replicas
-//func deploymentReplicasChanged(existingDeploy, newDeploy *appsv1.Deployment) bool {
-//	if existingDeploy.Spec.Replicas != newDeploy.Spec.Replicas {
-//		return true
-//	}
-//	return false
-//}
-//
-//// Helper functions to check changes on port
-//func svcPortsChanged(existingService, newService *corev1.Service) bool {
-//	if existingService.Spec.Ports[0].Port != newService.Spec.Ports[0].Port {
-//		return true
-//	}
-//	return false
-//}
-//
-//// Helper functions to check changes on selector
-//func svcSelectorChanged(existingService, newService *corev1.Service) bool {
-//	if len(existingService.Spec.Selector) != len(newService.Spec.Selector) {
-//		return true
-//	}
-//	for key, val := range existingService.Spec.Selector {
-//		if newService.Spec.Selector[key] != val {
-//			return true
-//		}
-//	}
-//	return false
-//}
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *WebAppReconciler) SetupWithManager(mgr ctrl.Manager) error {
