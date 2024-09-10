@@ -35,23 +35,32 @@ import (
 )
 
 var (
-	// ctrlLog is the local instance of the logger of the controller
-	ctrlLog = ctrl.Log.WithName("controller")
-
+	// webAppCreatedCounter is the prometheus counter metric to count WebApp resources creation
+	// its label is webapp_created_total
 	webAppCreatedCounter = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Name: "webapp_created_total",
 			Help: "Number of WebApp resources created",
 		},
 	)
-
+	// webAppDeletedCounter is the prometheus counter metric to count WebApp resources deletion
+	// its label is webapp_deleted_total
+	webAppDeletedCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "webapp_delete_total",
+			Help: "Number of WebApp resources deleted",
+		},
+	)
+	// deploymentCreatedCounter is the prometheus counter metric to count a deployment creation in the WebApp resource
+	// its label is deployment_created_total
 	deploymentCreatedCounter = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Name: "deployment_created_total",
 			Help: "Number of Deployment resources created for WebApp",
 		},
 	)
-
+	// serviceCreatedCounter is the prometheus counter metric to count a service creation in the WebApp resource
+	// its label is service_created_total
 	serviceCreatedCounter = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Name: "service_created_total",
@@ -60,9 +69,17 @@ var (
 	)
 )
 
+// webAppFinalizer is the constant defining the local controller finalizer; it allows logging when an object is deleted
+const webAppFinalizer = "finalizer.webapp.kubebuilder.demo"
+
 func init() {
 	// Register custom metrics with the global Prometheus registry
-	metrics.Registry.MustRegister(webAppCreatedCounter, deploymentCreatedCounter, serviceCreatedCounter)
+	metrics.Registry.MustRegister(
+		webAppCreatedCounter,
+		webAppDeletedCounter,
+		deploymentCreatedCounter,
+		serviceCreatedCounter,
+	)
 }
 
 // WebAppReconciler reconciles a WebApp object
@@ -70,9 +87,6 @@ type WebAppReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
-
-// webAppFinalizer is the constants defining the local controller finalizer; it allows logging when an object is deleted
-const webAppFinalizer = "finalizer.webapp.kubebuilder.demo"
 
 // Define RBAC permissions
 //+kubebuilder:rbac:groups=apps.kubebuilder.demo,resources=webapps,verbs=get;list;watch;create;update;patch;delete
@@ -91,7 +105,8 @@ const webAppFinalizer = "finalizer.webapp.kubebuilder.demo"
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.19.0/pkg/reconcile
 func (r *WebAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	logger := log.FromContext(ctx)
+	// instantiating a new logger
+	logger := log.FromContext(ctx).WithName("controller-reconcile")
 
 	// Fetch the WebApp instance
 	webApp := &appsv1alpha1.WebApp{}
@@ -109,6 +124,7 @@ func (r *WebAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if webApp.GetDeletionTimestamp() != nil {
 		// The object is being deleted
 		if controllerutil.ContainsFinalizer(webApp, webAppFinalizer) {
+			webAppDeletedCounter.Inc()
 			// Log the deletion of the WebApp resource
 			logger.Info("deleting WebApp resource",
 				"webapp", webApp.Name,
@@ -222,7 +238,7 @@ func (r *WebAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// Check if the service already exists
 	foundService := &corev1.Service{}
 	if err = r.Get(ctx, types.NamespacedName{Name: webApp.Name, Namespace: webApp.Namespace}, foundService); err != nil && errors.IsNotFound(err) {
-		ctrlLog.Info("creating new service", "service", service.Name,
+		logger.Info("creating new service", "service", service.Name,
 			"namespace", service.Namespace)
 		err = r.Create(ctx, service)
 		if err != nil {
