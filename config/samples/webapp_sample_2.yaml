@@ -12,4 +12,4 @@ metadata:
 spec:
   replicas: 2
   image: nginx:latest
-  port: 81
+  port: 8180

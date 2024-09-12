@@ -3,18 +3,18 @@ kind: Namespace
 metadata:
   labels:
     control-plane: controller-manager
-    app.kubernetes.io/name: kubebuilder-demo
+    app.kubernetes.io/name: webapp-operator
     app.kubernetes.io/managed-by: kustomize
-  name: system
+  name: webapp-operator
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: controller-manager
-  namespace: system
+  namespace: webapp-operator
   labels:
     control-plane: controller-manager
-    app.kubernetes.io/name: kubebuilder-demo
+    app.kubernetes.io/name: webapp-operator
     app.kubernetes.io/managed-by: kustomize
 spec:
   selector:
@@ -63,7 +63,9 @@ spec:
         args:
           - --leader-elect
           - --health-probe-bind-address=:8081
-        image: controller:latest
+          - --metrics-bind-address=:9080
+          - --metrics-secure=false
+        image: xiloss/webapp-operator:latest
         imagePullPolicy: IfNotPresent
         name: manager
         securityContext:

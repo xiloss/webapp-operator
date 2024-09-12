@@ -359,10 +359,10 @@ func updateDeploymentSpec(deployment *appsv1.Deployment, webApp *appsv1alpha1.We
 		deployment.Spec.Template.Spec.Containers[0].Image = webApp.Spec.Image
 		updated = true
 	}
-	if deployment.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort != webApp.Spec.Port {
-		deployment.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort = webApp.Spec.Port
-		updated = true
-	}
+	//if deployment.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort != webApp.Spec.Port {
+	//	deployment.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort = webApp.Spec.Port
+	//	updated = true
+	//}
 	return updated
 }
 
