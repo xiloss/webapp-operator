@@ -18,11 +18,13 @@ package controller
 
 import (
 	"context"
+	"reflect"
+
 	"github.com/prometheus/client_golang/prometheus"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/apis/meta/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -56,7 +58,15 @@ var (
 	deploymentCreatedCounter = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Name: "deployment_created_total",
-			Help: "Number of Deployment resources created for WebApp",
+			Help: "Number of Deployment resources created in WebApp",
+		},
+	)
+	// deploymentUpdatedCounter is the prometheus counter metric to count a deployment update in the WebApp resource
+	// its label is deployment_updated_total
+	deploymentUpdatedCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "deployment_updated_total",
+			Help: "Number of Deployment resources updated in WebApp",
 		},
 	)
 	// serviceCreatedCounter is the prometheus counter metric to count a service creation in the WebApp resource
@@ -64,6 +74,14 @@ var (
 	serviceCreatedCounter = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Name: "service_created_total",
+			Help: "Number of Service resources created for WebApp",
+		},
+	)
+	// serviceUpdatedCounter is the prometheus counter metric to count a service update in the WebApp resource
+	// its label is service_updated_total
+	serviceUpdatedCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "service_updated_total",
 			Help: "Number of Service resources created for WebApp",
 		},
 	)
@@ -78,7 +96,9 @@ func init() {
 		webAppCreatedCounter,
 		webAppDeletedCounter,
 		deploymentCreatedCounter,
+		deploymentUpdatedCounter,
 		serviceCreatedCounter,
+		serviceUpdatedCounter,
 	)
 }
 
@@ -124,11 +144,10 @@ func (r *WebAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if webApp.GetDeletionTimestamp() != nil {
 		// The object is being deleted
 		if controllerutil.ContainsFinalizer(webApp, webAppFinalizer) {
-			webAppDeletedCounter.Inc()
-			// Log the deletion of the WebApp resource
+			// Log the deletion start on the WebApp resource
 			logger.Info("deleting WebApp resource",
-				"webapp", webApp.Name,
-				"namespace", webApp.Namespace)
+				"webapp_name", webApp.Name,
+				"webapp_namespace", webApp.Namespace)
 			// Perform any additional cleanup logic if necessary
 			// Remove finalizer
 			controllerutil.RemoveFinalizer(webApp, webAppFinalizer)
@@ -136,12 +155,18 @@ func (r *WebAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			if err != nil {
 				return ctrl.Result{}, err
 			}
+			// increment counter when a WebApp resource is deleted
+			webAppDeletedCounter.Inc()
+			// Log the deletion start on the WebApp resource
+			logger.Info("deleted WebApp resource",
+				"webapp_name", webApp.Name,
+				"webapp_namespace", webApp.Namespace)
 		}
-		// Stop reconciliation as the object is being deleted
+		// Stop reconciliation as the object is deleted
 		return ctrl.Result{}, nil
 	}
 
-	// Add a finalizer if it doesn't already have one
+	// Add a finalizer to control the deletion of the resource from the operator
 	if !controllerutil.ContainsFinalizer(webApp, webAppFinalizer) {
 		controllerutil.AddFinalizer(webApp, webAppFinalizer)
 		err := r.Update(ctx, webApp)
@@ -150,19 +175,128 @@ func (r *WebAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
-	// Define the desired deployment
-	deployment := &appsv1.Deployment{
-		ObjectMeta: v1.ObjectMeta{
+	// Reconcile Deployment Section
+	deployment := createDeployment(webApp)
+	// Set WebApp instance as the owner and controller of the deployment
+	if err := controllerutil.SetControllerReference(webApp, deployment, r.Scheme); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	foundDeployment, err := r.getDeployment(ctx, webApp)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			logger.Info(
+				"creating a new deployment",
+				"deployment_name", deployment.Name,
+				"deployment_namespace", deployment.Namespace,
+			)
+			if err := r.Create(ctx, deployment); err != nil {
+				return ctrl.Result{}, err
+			}
+			logger.Info(
+				"deployment created",
+				"deployment_name", deployment.Name,
+				"deployment_namespace", deployment.Namespace,
+			)
+			deploymentCreatedCounter.Inc()
+			// on deployment creation, the webapp is always created too
+			webAppCreatedCounter.Inc()
+		} else {
+			return ctrl.Result{}, err
+		}
+	} else {
+		if updateDeploymentSpec(foundDeployment, webApp) {
+			logger.Info("updating deployment",
+				"deployment_name", foundDeployment.Name,
+				"deployment_namespace", foundDeployment.Namespace,
+			)
+			if err := r.Update(ctx, foundDeployment); err != nil {
+				return ctrl.Result{}, err
+			}
+			logger.Info(
+				"deployment updated",
+				"deployment_name", deployment.Name,
+				"deployment_namespace", deployment.Namespace,
+			)
+			deploymentUpdatedCounter.Inc()
+		}
+	}
+
+	service := createService(webApp)
+	// Set WebApp instance as the owner and controller of the service
+	if err := controllerutil.SetControllerReference(webApp, service, r.Scheme); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// Check if the service already exists
+	foundService, err := r.getService(ctx, webApp)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			logger.Info("creating a new service",
+				"service_namespace", service.Namespace,
+				"service_name", service.Name,
+			)
+			if err := r.Create(ctx, service); err != nil {
+				return ctrl.Result{}, err
+			}
+			logger.Info(
+				"service created",
+				"service_name", service.Name,
+				"service_namespace", service.Namespace,
+			)
+			serviceCreatedCounter.Inc()
+		} else {
+			return ctrl.Result{}, err
+		}
+	} else {
+		if updateServiceSpec(foundService, webApp) {
+			logger.Info("updating Service",
+				"service_name", foundService.Name,
+				"service_namespace", foundService.Namespace,
+			)
+			if err := r.Update(ctx, foundService); err != nil {
+				return ctrl.Result{}, err
+			}
+			logger.Info(
+				"service updated",
+				"service_name", service.Name,
+				"service_namespace", service.Namespace,
+			)
+			serviceUpdatedCounter.Inc()
+		}
+	}
+
+	// Update status
+	if err := r.updateStatus(ctx, webApp, foundDeployment, foundService,
+		"ReconcileComplete", "reconciliation completed successfully"); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	logger.Info("skip reconcile: all resources are reconciled",
+		"deployment_name", foundDeployment.Name,
+		"deployment_namespace", foundDeployment.Namespace,
+		"service_name", foundService.Name,
+		"service_namespace", foundService.Namespace,
+	)
+
+	return ctrl.Result{}, nil
+}
+
+// createDeployment is used to create an empty deployment prototype to be reconciled
+func createDeployment(webApp *appsv1alpha1.WebApp) *appsv1.Deployment {
+	// return the desired deployment prototype
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
 			Name:      webApp.Name,
 			Namespace: webApp.Namespace,
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: &webApp.Spec.Replicas,
-			Selector: &v1.LabelSelector{
+			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{"app": webApp.Name},
 			},
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: v1.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{"app": webApp.Name},
 				},
 				Spec: corev1.PodSpec{
@@ -181,41 +315,12 @@ func (r *WebAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			},
 		},
 	}
+}
 
-	// Set WebApp instance as the owner and controller
-	if err := controllerutil.SetControllerReference(webApp, deployment, r.Scheme); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	// Check if the deployment already exists
-	foundDeployment := &appsv1.Deployment{}
-	err = r.Get(ctx, types.NamespacedName{Name: webApp.Name, Namespace: webApp.Namespace}, foundDeployment)
-	if err != nil && errors.IsNotFound(err) {
-		logger.Info("Creating a new Deployment", "namespace", deployment.Namespace, "name", deployment.Name)
-		err = r.Create(ctx, deployment)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-		deploymentCreatedCounter.Inc() // Increment deployment counter
-		webAppCreatedCounter.Inc()     // Increment webApp counter
-		// Deployment created successfully - don't requeue
-		return ctrl.Result{}, nil
-	} else if err != nil {
-		return ctrl.Result{}, err
-	}
-
-	// Ensure the deployment size is the same as the spec
-	if *foundDeployment.Spec.Replicas != webApp.Spec.Replicas {
-		foundDeployment.Spec.Replicas = &webApp.Spec.Replicas
-		err = r.Update(ctx, foundDeployment)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-	}
-
-	// Define the desired service
-	service := &corev1.Service{
-		ObjectMeta: v1.ObjectMeta{
+func createService(webApp *appsv1alpha1.WebApp) *corev1.Service {
+	// return the desired service prototype
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
 			Name:      webApp.Name,
 			Namespace: webApp.Namespace,
 		},
@@ -227,45 +332,122 @@ func (r *WebAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 					Protocol: corev1.ProtocolTCP,
 				},
 			},
+			Type: corev1.ServiceTypeClusterIP,
 		},
 	}
+}
 
-	// Set WebApp instance as the owner and controller
-	if err := controllerutil.SetControllerReference(webApp, service, r.Scheme); err != nil {
-		return ctrl.Result{}, err
-	}
+func (r *WebAppReconciler) getDeployment(ctx context.Context, webApp *appsv1alpha1.WebApp) (*appsv1.Deployment, error) {
+	foundDeployment := &appsv1.Deployment{}
+	err := r.Get(ctx, types.NamespacedName{Name: webApp.Name, Namespace: webApp.Namespace}, foundDeployment)
+	return foundDeployment, err
+}
 
-	// Check if the service already exists
+func (r *WebAppReconciler) getService(ctx context.Context, webApp *appsv1alpha1.WebApp) (*corev1.Service, error) {
 	foundService := &corev1.Service{}
-	if err = r.Get(ctx, types.NamespacedName{Name: webApp.Name, Namespace: webApp.Namespace}, foundService); err != nil && errors.IsNotFound(err) {
-		logger.Info("creating new service", "service", service.Name,
-			"namespace", service.Namespace)
-		err = r.Create(ctx, service)
-		if err != nil {
-			return ctrl.Result{}, err
+	err := r.Get(ctx, types.NamespacedName{Name: webApp.Name, Namespace: webApp.Namespace}, foundService)
+	return foundService, err
+}
+
+func updateDeploymentSpec(deployment *appsv1.Deployment, webApp *appsv1alpha1.WebApp) bool {
+	updated := false
+	if *deployment.Spec.Replicas != webApp.Spec.Replicas {
+		deployment.Spec.Replicas = &webApp.Spec.Replicas
+		updated = true
+	}
+	if deployment.Spec.Template.Spec.Containers[0].Image != webApp.Spec.Image {
+		deployment.Spec.Template.Spec.Containers[0].Image = webApp.Spec.Image
+		updated = true
+	}
+	if deployment.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort != webApp.Spec.Port {
+		deployment.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort = webApp.Spec.Port
+		updated = true
+	}
+	return updated
+}
+
+func updateServiceSpec(service *corev1.Service, webApp *appsv1alpha1.WebApp) bool {
+	updated := false
+	if len(service.Spec.Ports) > 0 && service.Spec.Ports[0].Port != webApp.Spec.Port {
+		service.Spec.Ports[0].Port = webApp.Spec.Port
+		updated = true
+	}
+	return updated
+}
+
+func mergeConditions(conditions []metav1.Condition, newCondition metav1.Condition) []metav1.Condition {
+	for i, cond := range conditions {
+		if cond.Type == newCondition.Type {
+			if cond.Status != newCondition.Status || cond.Reason != newCondition.Reason || cond.Message != newCondition.Message {
+				conditions[i] = newCondition
+			}
+			return conditions
 		}
-		serviceCreatedCounter.Inc() // Increment service counter
-		// Service created successfully - don't requeue
-		return ctrl.Result{}, nil
-	} else if err != nil {
-		return ctrl.Result{}, err
+	}
+	return append(conditions, newCondition)
+}
+
+func (r *WebAppReconciler) updateStatus(ctx context.Context, webApp *appsv1alpha1.WebApp, deployment *appsv1.Deployment, service *corev1.Service, reason, message string) error {
+	logger := log.FromContext(ctx)
+
+	updated := false
+	newStatus := webApp.Status.DeepCopy()
+
+	if deployment != nil {
+		if newStatus.ReadyReplicas != deployment.Status.ReadyReplicas {
+			newStatus.ReadyReplicas = deployment.Status.ReadyReplicas
+			updated = true
+		}
+		if newStatus.AvailableReplicas != deployment.Status.AvailableReplicas {
+			newStatus.AvailableReplicas = deployment.Status.AvailableReplicas
+			updated = true
+		}
 	}
 
-	// Service already exists - don't requeue
-	logger.Info("Skip reconcile: Service already exists",
-		"namespace", foundService.Namespace,
-		"service", foundService.Name)
+	if service != nil && len(service.Spec.Ports) > 0 {
+		if newStatus.ServicePort != service.Spec.Ports[0].Port {
+			newStatus.ServicePort = service.Spec.Ports[0].Port
+			updated = true
+		}
+		if newStatus.ServiceType != string(service.Spec.Type) {
+			newStatus.ServiceType = string(service.Spec.Type)
+			updated = true
+		}
+	}
 
-	return ctrl.Result{}, nil
+	newCondition := metav1.Condition{
+		Type:               "ReconcileCompleted",
+		Status:             metav1.ConditionTrue,
+		LastTransitionTime: metav1.Now(),
+		Reason:             reason,
+		Message:            message,
+	}
+
+	newStatus.Conditions = mergeConditions(newStatus.Conditions, newCondition)
+
+	if !reflect.DeepEqual(webApp.Status, *newStatus) {
+		webApp.Status = *newStatus
+		updated = true
+	}
+
+	if updated {
+		if err := r.Status().Update(ctx, webApp); err != nil {
+			logger.Error(err, "Failed to update WebApp status")
+			return err
+		}
+	}
+	return nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *WebAppReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
+		// Looping on the WebApp custom resource
 		For(&appsv1alpha1.WebApp{}).
 		// Deployment is included in ownership here
 		Owns(&appsv1.Deployment{}).
 		// Service is included in ownership here
 		Owns(&corev1.Service{}).
+		// completing the returning loop
 		Complete(r)
 }

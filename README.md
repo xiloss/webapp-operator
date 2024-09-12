@@ -1,4 +1,4 @@
-# KUBEBUILDER DEMO
+# WEBAPP OPERATOR DEMO
 
 A simple step-by-step guide to start working with kubernetes operators.
 
@@ -11,7 +11,7 @@ For this demonstration, the prerequisite packages and versions are
 
 First let's setup kubebuilder:
 
-```bash
+```bashwebapp-operator
 # Go to your home directory
 cd ~
 # Current kubebuilder latest version

@@ -38,7 +38,11 @@ type WebAppSpec struct {
 // WebAppStatus defines the observed state of WebApp
 type WebAppStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	ReadyReplicas     int32              `json:"readyReplicas,omitempty"`
+	AvailableReplicas int32              `json:"availableReplicas,omitempty"`
+	ServicePort       int32              `json:"servicePort,omitempty"`
+	ServiceType       string             `json:"serviceType,omitempty"`
+	Conditions        []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true

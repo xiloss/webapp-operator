@@ -5,8 +5,8 @@
 domain: kubebuilder.demo
 layout:
 - go.kubebuilder.io/v4
-projectName: kubebuilder-demo
-repo: kubebuilder-demo
+projectName: webapp-operator
+repo: webapp-operator
 resources:
 - api:
     crdVersion: v1
@@ -15,6 +15,6 @@ resources:
   domain: kubebuilder.demo
   group: apps
   kind: WebApp
-  path: kubebuilder-demo/api/v1alpha1
+  path: webapp-operator/api/v1alpha1
   version: v1alpha1
 version: "3"
