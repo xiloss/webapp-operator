@@ -2,14 +2,14 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: webapp-sample
+  name: webapp-re-sample
 ---
 apiVersion: apps.kubebuilder.demo/v1alpha1
 kind: WebApp
 metadata:
-  name: webapp-sample
-  namespace: webapp-sample
+  name: webapp-re-sample
+  namespace: webapp-re-sample
 spec:
   replicas: 2
   image: nginx:latest
-  port: 80
+  port: 81

@@ -224,6 +224,12 @@ make docker
 
 The default will create a local image called `controller:latest`
 This image needs to be uploaded to the kind cluster if the target repository will not be created on docker.io registry.
+If the target cluster has to retrieve the built image from a remote registry, then a manual re-tagging will be required.
+To upload the container image to the local kind cluster, run the following command:
+
+```bash
+kind load docker-image docker.io/library/controller:latest --name=<kind-cluster-name>
+```
 
 ### Customize the Operator Deployment Details
 
